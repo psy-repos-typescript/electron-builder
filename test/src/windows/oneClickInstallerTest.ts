@@ -5,7 +5,7 @@ import { assertThat } from "../helpers/fileAssert"
 import { app, assertPack, copyTestAsset, modifyPackageJson } from "../helpers/packTester"
 import { checkHelpers, doTest, expectUpdateMetadata } from "../helpers/winHelper"
 
-const nsisTarget = Platform.WINDOWS.createTarget(["nsis"])
+const nsisTarget = Platform.WINDOWS.createTarget(["nsis"], Arch.x64)
 
 function pickSnapshotDefines(defines: any) {
   return {
@@ -32,7 +32,9 @@ test(
       targets: Platform.WINDOWS.createTarget(["nsis"], Arch.x64),
       config: {
         win: {
-          publisherName: "Foo, Inc",
+          signtoolOptions: {
+            publisherName: "Foo, Inc",
+          },
         },
         publish: {
           provider: "generic",
@@ -42,6 +44,16 @@ test(
         nsis: {
           deleteAppDataOnUninstall: true,
           packElevateHelper: false,
+        },
+        electronFuses: {
+          runAsNode: true,
+          enableCookieEncryption: true,
+          enableNodeOptionsEnvironmentVariable: true,
+          enableNodeCliInspectArguments: true,
+          enableEmbeddedAsarIntegrityValidation: true,
+          onlyLoadAppFromAsar: true,
+          loadBrowserProcessSpecificV8Snapshot: true,
+          grantFileProtocolExtraPrivileges: undefined, // unsupported on current electron version in our tests
         },
       },
     },
@@ -71,11 +83,11 @@ test.ifAll(
   })
 )
 
-test.ifAll.ifNotCiMac(
+test.ifAll(
   "multi language license",
   app(
     {
-      targets: Platform.WINDOWS.createTarget("nsis"),
+      targets: Platform.WINDOWS.createTarget("nsis", Arch.x64),
       config: {
         publish: null,
         nsis: {
@@ -97,11 +109,11 @@ test.ifAll.ifNotCiMac(
   )
 )
 
-test.ifAll.ifNotCiMac(
+test.ifAll(
   "html license",
   app(
     {
-      targets: Platform.WINDOWS.createTarget("nsis"),
+      targets: Platform.WINDOWS.createTarget("nsis", Arch.x64),
       config: {
         publish: null,
         nsis: {
@@ -177,7 +189,7 @@ test.ifDevOrLinuxCi(
   )
 )
 
-test.skip.ifNotCiMac("installerHeaderIcon", () => {
+test.skip("installerHeaderIcon", () => {
   let headerIconPath: string | null = null
   return assertPack(
     "test-app-one",
@@ -245,7 +257,7 @@ test.ifDevOrLinuxCi(
   )
 )
 
-test.ifAll.ifNotCiMac(
+test.ifAll(
   "menuCategory",
   app(
     {
@@ -275,7 +287,7 @@ test.ifAll.ifNotCiMac(
   )
 )
 
-test.ifNotCiMac(
+test(
   "string menuCategory",
   app(
     {
@@ -332,6 +344,32 @@ test.skip.ifWindows(
       win: {
         executableName: "Boo",
       },
+      electronFuses: {
+        runAsNode: true,
+        enableCookieEncryption: true,
+        enableNodeOptionsEnvironmentVariable: true,
+        enableNodeCliInspectArguments: true,
+        enableEmbeddedAsarIntegrityValidation: true,
+        onlyLoadAppFromAsar: true,
+        loadBrowserProcessSpecificV8Snapshot: true,
+        grantFileProtocolExtraPrivileges: undefined, // unsupported on current electron version in our tests
+      },
+    },
+    effectiveOptionComputed: async it => {
+      expect(pickSnapshotDefines(it[0])).toMatchSnapshot()
+      return false
+    },
+  })
+)
+
+test.skip.ifWindows(
+  "top-level custom exec name",
+  app({
+    targets: nsisTarget,
+    config: {
+      publish: null,
+      productName: "foo",
+      executableName: "Boo",
     },
     effectiveOptionComputed: async it => {
       expect(pickSnapshotDefines(it[0])).toMatchSnapshot()

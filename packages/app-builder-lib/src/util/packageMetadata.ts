@@ -1,4 +1,5 @@
-import { isEmptyOrSpaces, log, InvalidConfigurationError } from "builder-util"
+import { InvalidConfigurationError, isEmptyOrSpaces, log } from "builder-util"
+import { Nullish } from "builder-util-runtime"
 import { readFile, readJson } from "fs-extra"
 import * as path from "path"
 import * as semver from "semver"
@@ -24,7 +25,7 @@ async function authors(file: string, data: any) {
   let authorData
   try {
     authorData = await readFile(path.resolve(path.dirname(file), "AUTHORS"), "utf8")
-  } catch (ignored) {
+  } catch (_ignored) {
     return
   }
 
@@ -38,7 +39,7 @@ export function checkMetadata(metadata: Metadata, devMetadata: any | null, appPa
     errors.push(`Please specify '${missedFieldName}' in the package.json (${appPackageFile})`)
   }
 
-  const checkNotEmpty = (name: string, value: string | null | undefined) => {
+  const checkNotEmpty = (name: string, value: string | Nullish) => {
     if (isEmptyOrSpaces(value)) {
       reportError(name)
     }
@@ -68,9 +69,9 @@ export function checkMetadata(metadata: Metadata, devMetadata: any | null, appPa
   }
 
   const devDependencies = (metadata as any).devDependencies
-  if (devDependencies != null && "@electron/rebuild" in devDependencies) {
+  if (devDependencies != null && ("electron-rebuild" in devDependencies || "@electron/rebuild" in devDependencies)) {
     log.info(
-      '@electron/rebuild is already incorporated into electron-builder, please consider to remove excess dependency from devDependencies\n\nTo ensure your native dependencies are always matched electron version, simply add script `"postinstall": "electron-builder install-app-deps" to your `package.json`'
+      '@electron/rebuild already used by electron-builder, please consider to remove excess dependency from devDependencies\n\nTo ensure your native dependencies are always matched electron version, simply add script `"postinstall": "electron-builder install-app-deps" to your `package.json`'
     )
   }
 
@@ -92,17 +93,28 @@ function versionSatisfies(version: string | semver.SemVer | null, range: string 
   return semver.satisfies(coerced, range, loose)
 }
 
-function checkDependencies(dependencies: { [key: string]: string } | null | undefined, errors: Array<string>) {
+function checkDependencies(dependencies: Record<string, string> | Nullish, errors: Array<string>) {
   if (dependencies == null) {
     return
   }
 
-  const updaterVersion = dependencies["electron-updater"]
-  const requiredElectronUpdaterVersion = "4.0.0"
-  if (updaterVersion != null && !versionSatisfies(updaterVersion, `>=${requiredElectronUpdaterVersion}`)) {
-    errors.push(
-      `At least electron-updater ${requiredElectronUpdaterVersion} is recommended by current electron-builder version. Please set electron-updater version to "^${requiredElectronUpdaterVersion}"`
-    )
+  let updaterVersion = dependencies["electron-updater"]
+  if (updaterVersion != null) {
+    // Pick the version out of yarn berry patch syntax
+    // "patch:electron-updater@npm%3A6.4.1#~/.yarn/patches/electron-updater-npm-6.4.1-ef33e6cc39.patch"
+    if (updaterVersion.startsWith("patch:")) {
+      const match = updaterVersion.match(/@npm%3A(.+?)#/)
+      if (match) {
+        updaterVersion = match[1]
+      }
+    }
+
+    const requiredElectronUpdaterVersion = "4.0.0"
+    if (!versionSatisfies(updaterVersion, `>=${requiredElectronUpdaterVersion}`)) {
+      errors.push(
+        `At least electron-updater ${requiredElectronUpdaterVersion} is recommended by current electron-builder version. Please set electron-updater version to "^${requiredElectronUpdaterVersion}"`
+      )
+    }
   }
 
   const swVersion = dependencies["electron-builder-squirrel-windows"]
@@ -110,7 +122,7 @@ function checkDependencies(dependencies: { [key: string]: string } | null | unde
     errors.push(`At least electron-builder-squirrel-windows 20.32.0 is required by current electron-builder version. Please set electron-builder-squirrel-windows to "^20.32.0"`)
   }
 
-  const deps = ["electron", "electron-prebuilt", "@electron/rebuild"]
+  const deps = ["electron", "electron-prebuilt", "electron-rebuild"]
   if (process.env.ALLOW_ELECTRON_BUILDER_AS_PRODUCTION_DEPENDENCY !== "true") {
     deps.push("electron-builder")
   }

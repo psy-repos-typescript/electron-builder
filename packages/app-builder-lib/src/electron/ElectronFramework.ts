@@ -1,17 +1,18 @@
-import BluebirdPromise from "bluebird-lst"
-import { asArray, executeAppBuilder, log } from "builder-util"
-import { CONCURRENCY, copyDir, DO_NOT_USE_HARD_LINKS, statOrNull, unlinkIfExists } from "builder-util/out/fs"
+import { asArray, copyDir, DO_NOT_USE_HARD_LINKS, executeAppBuilder, log, MAX_FILE_REQUESTS, statOrNull, unlinkIfExists } from "builder-util"
 import { emptyDir, readdir, rename } from "fs-extra"
+import * as fs from "fs/promises"
 import * as path from "path"
+import asyncPool from "tiny-async-pool"
 import { Configuration } from "../configuration"
 import { BeforeCopyExtraFilesOptions, Framework, PrepareApplicationStageDirectoryOptions } from "../Framework"
 import { Packager, Platform } from "../index"
 import { LinuxPackager } from "../linuxPackager"
-import MacPackager from "../macPackager"
+import { MacPackager } from "../macPackager"
 import { getTemplatePath } from "../util/pathManager"
+import { resolveFunction } from "../util/resolve"
 import { createMacApp } from "./electronMac"
 import { computeElectronVersion, getElectronVersionFromInstalled } from "./electronVersion"
-import * as fs from "fs/promises"
+import { addWinAsarIntegrity } from "./electronWin"
 import injectFFMPEG from "./injectFFMPEG"
 
 export type ElectronPlatformName = "darwin" | "linux" | "win32" | "mas"
@@ -78,6 +79,9 @@ async function beforeCopyExtraFiles(options: BeforeCopyExtraFilesOptions) {
   } else if (packager.platform === Platform.WINDOWS) {
     const executable = path.join(appOutDir, `${packager.appInfo.productFilename}.exe`)
     await rename(path.join(appOutDir, `${electronBranding.projectName}.exe`), executable)
+    if (options.asarIntegrity) {
+      await addWinAsarIntegrity(executable, options.asarIntegrity)
+    }
   } else {
     await createMacApp(packager as MacPackager, appOutDir, options.asarIntegrity, (options.platformName as ElectronPlatformName) === "mas")
   }
@@ -95,21 +99,17 @@ async function removeUnusedLanguagesIfNeeded(options: BeforeCopyExtraFilesOption
 
   const { dir, langFileExt } = getLocalesConfig(options)
   // noinspection SpellCheckingInspection
-  await BluebirdPromise.map(
-    readdir(dir),
-    file => {
-      if (!file.endsWith(langFileExt)) {
-        return
-      }
-
-      const language = file.substring(0, file.length - langFileExt.length)
-      if (!wantedLanguages.includes(language)) {
-        return fs.rm(path.join(dir, file), { recursive: true, force: true })
-      }
+  await asyncPool(MAX_FILE_REQUESTS, await readdir(dir), async file => {
+    if (!file.endsWith(langFileExt)) {
       return
-    },
-    CONCURRENCY
-  )
+    }
+
+    const language = file.substring(0, file.length - langFileExt.length)
+    if (!wantedLanguages.includes(language)) {
+      return fs.rm(path.join(dir, file), { recursive: true, force: true })
+    }
+    return
+  })
 
   function getLocalesConfig(options: BeforeCopyExtraFilesOptions) {
     const { appOutDir, packager } = options
@@ -131,7 +131,11 @@ class ElectronFramework implements Framework {
   // noinspection JSUnusedGlobalSymbols
   readonly isNpmRebuildRequired = true
 
-  constructor(readonly name: string, readonly version: string, readonly distMacOsAppName: string) {}
+  constructor(
+    readonly name: string,
+    readonly version: string,
+    readonly distMacOsAppName: string
+  ) {}
 
   getDefaultIcon(platform: Platform) {
     if (platform === Platform.LINUX) {
@@ -176,15 +180,28 @@ export async function createElectronFrameworkSupport(configuration: Configuratio
 async function unpack(prepareOptions: PrepareApplicationStageDirectoryOptions, options: ElectronDownloadOptions, distMacOsAppName: string) {
   const { packager, appOutDir, platformName } = prepareOptions
 
-  const electronDist = packager.config.electronDist
-  let dist: string | undefined | null = typeof electronDist === "function" ? electronDist(prepareOptions) : electronDist
+  const electronDist = packager.config.electronDist || null
+  let dist: string | null = null
+  // check if supplied a custom electron distributable/fork/predownloaded directory
+  if (typeof electronDist === "string") {
+    let resolvedDist: string
+    // check if custom electron hook file for import  resolving
+    if ((await statOrNull(electronDist))?.isFile()) {
+      const customElectronDist: any = await resolveFunction(packager.appInfo.type, electronDist, "electronDist")
+      resolvedDist = await Promise.resolve(typeof customElectronDist === "function" ? customElectronDist(prepareOptions) : customElectronDist)
+    } else {
+      resolvedDist = electronDist
+    }
+    dist = path.isAbsolute(resolvedDist) ? resolvedDist : path.resolve(packager.projectDir, resolvedDist)
+  }
   if (dist != null) {
     const zipFile = `electron-v${options.version}-${platformName}-${options.arch}.zip`
-    const resolvedDist = path.isAbsolute(dist) ? dist : path.resolve(packager.projectDir, dist)
-    if ((await statOrNull(path.join(resolvedDist, zipFile))) != null) {
-      log.info({ resolvedDist, zipFile }, "resolved electronDist")
-      options.cache = resolvedDist
+    if ((await statOrNull(path.join(dist, zipFile))) != null) {
+      log.info({ dist, zipFile }, "resolved electronDist")
+      options.cache = dist
       dist = null
+    } else {
+      log.info({ electronDist: log.filePath(dist), expectedFile: zipFile }, "custom electronDist provided but no zip found; assuming unpacked electron directory.")
     }
   }
 

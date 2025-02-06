@@ -1,10 +1,10 @@
 import { checkBuildRequestOptions } from "app-builder-lib"
-import { doMergeConfigs } from "app-builder-lib/out/util/config"
+import { doMergeConfigs } from "app-builder-lib/out/util/config/config"
 import { Arch, createTargets, DIR_TARGET, Platform } from "electron-builder"
-import { promises as fs } from "fs"
-import { outputJson } from "fs-extra"
-import * as path from "path"
 import { createYargs } from "electron-builder/out/builder"
+import { promises as fs } from "fs"
+import { outputFile, outputJson } from "fs-extra"
+import * as path from "path"
 import { app, appTwo, appTwoThrows, assertPack, linuxDirTarget, modifyPackageJson, packageJson, toSystemIndependentPath } from "./helpers/packTester"
 import { ELECTRON_VERSION } from "./helpers/testConfig"
 import { verifySmartUnpack } from "./helpers/verifySmartUnpack"
@@ -299,6 +299,9 @@ test.ifDevOrLinuxCi("win smart unpack", () => {
             nodeModuleFiles.push(name)
           }
         },
+        win: {
+          signAndEditExecutable: false, // setting `true` will fail on arm64 macs, even within docker container since rcedit doesn't work within wine on arm64
+        },
       },
     },
     {
@@ -321,6 +324,33 @@ test.ifDevOrLinuxCi("win smart unpack", () => {
   )()
 })
 
+test.ifDevOrWinCi("smart unpack local module with dll file", () => {
+  return app(
+    {
+      targets: Platform.WINDOWS.createTarget(DIR_TARGET),
+    },
+    {
+      isInstallDepsBefore: true,
+      projectDirCreated: async (projectDir, tmpDir) => {
+        const tempDir = await tmpDir.getTempDir()
+        const localPath = path.join(tempDir, "foo")
+        await outputFile(path.join(localPath, "package.json"), `{"name":"foo","version":"9.0.0","main":"index.js","license":"MIT"}`)
+        await outputFile(path.join(localPath, "test.dll"), `test`)
+        await modifyPackageJson(projectDir, data => {
+          data.dependencies = {
+            debug: "3.1.0",
+            "edge-cs": "1.2.1",
+            foo: `file:${localPath}`,
+          }
+        })
+      },
+      packed: async context => {
+        await verifySmartUnpack(context.getResources(Platform.WINDOWS))
+      },
+    }
+  )()
+})
+
 // https://github.com/electron-userland/electron-builder/issues/1738
 test.ifDevOrLinuxCi(
   "posix smart unpack",
@@ -332,10 +362,14 @@ test.ifDevOrLinuxCi(
         // tslint:disable-next-line:no-invalid-template-strings
         copyright: "Copyright © 2018 ${author}",
         npmRebuild: true,
+        onNodeModuleFile: filePath => {
+          // Force include this directory in the package
+          return filePath.includes("node_modules/three/examples")
+        },
         files: [
           // test ignore pattern for node_modules defined as file set filter
           {
-            filter: ["!node_modules/napi-build-utils/napi-build-utils-1.0.0.tgz", "!node_modules/node-abi/*"],
+            filter: ["!node_modules/napi-build-utils/napi-build-utils-1.0.0.tgz", "!node_modules/node-abi/*", "!node_modules/**/eslint-format.js"],
           },
         ],
       },
@@ -345,14 +379,15 @@ test.ifDevOrLinuxCi(
         it.dependencies = {
           debug: "4.1.1",
           "edge-cs": "1.2.1",
-          // no prebuilt for electron 3
-          // "lzma-native": "3.0.10",
-          keytar: "5.6.0",
+          keytar: "7.9.0",
+          three: "0.160.0",
         }
       }),
-      packed: context => {
+      packed: async context => {
         expect(context.packager.appInfo.copyright).toBe("Copyright © 2018 Foo Bar")
-        return verifySmartUnpack(context.getResources(Platform.LINUX))
+        await verifySmartUnpack(context.getResources(Platform.LINUX), async asarFs => {
+          return expect(await asarFs.readFile(`node_modules${path.sep}three${path.sep}examples${path.sep}fonts${path.sep}README.md`)).toMatchSnapshot()
+        })
       },
     }
   )

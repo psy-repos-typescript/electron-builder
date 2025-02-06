@@ -1,7 +1,7 @@
-import { app, appThrows } from "../helpers/packTester"
 import { Platform } from "electron-builder"
 import { XMLParser } from "fast-xml-parser"
 import * as fs from "fs"
+import { app, appThrows } from "../helpers/packTester"
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -23,6 +23,16 @@ test.ifAll.ifDevOrWinCi(
         win: {
           target: ["msiWrapped"],
         },
+        electronFuses: {
+          runAsNode: true,
+          enableCookieEncryption: true,
+          enableNodeOptionsEnvironmentVariable: true,
+          enableNodeCliInspectArguments: true,
+          enableEmbeddedAsarIntegrityValidation: true,
+          onlyLoadAppFromAsar: true,
+          loadBrowserProcessSpecificV8Snapshot: true,
+          grantFileProtocolExtraPrivileges: undefined, // unsupported on current electron version in our tests
+        },
       },
     },
     {},
@@ -30,6 +40,26 @@ test.ifAll.ifDevOrWinCi(
       expect(error).toBeInstanceOf(Error)
       expect(error.message).toBe("No nsis target found! Please specify an nsis target")
     }
+  )
+)
+
+test.ifAll.ifDevOrWinCi(
+  "msiWrapped allows capitalized nsis target",
+  app(
+    {
+      targets: Platform.WINDOWS.createTarget(["msiWrapped", "NSIS"]),
+      config: {
+        appId: "build.electron.test.msi.oneClick.perMachine",
+        extraMetadata: {
+          // version: "1.0.0",
+        },
+        productName: "Test MSI",
+        win: {
+          target: ["msiWrapped", "NSIS"],
+        },
+      },
+    },
+    {}
   )
 )
 

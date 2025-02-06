@@ -1,6 +1,5 @@
-import { path7za } from "7zip-bin"
 import { appBuilderPath } from "app-builder-bin"
-import { safeStringifyJson } from "builder-util-runtime"
+import { retry as _retry, Nullish, safeStringifyJson } from "builder-util-runtime"
 import * as chalk from "chalk"
 import { ChildProcess, execFile, ExecFileOptions, SpawnOptions } from "child_process"
 import { spawn as _spawn } from "cross-spawn"
@@ -8,8 +7,9 @@ import { createHash } from "crypto"
 import _debug from "debug"
 import { dump } from "js-yaml"
 import * as path from "path"
-import { debug, log } from "./log"
 import { install as installSourceMap } from "source-map-support"
+import { getPath7za } from "./7za"
+import { debug, log } from "./log"
 
 if (process.env.JEST_WORKER_ID == null) {
   installSourceMap()
@@ -17,15 +17,20 @@ if (process.env.JEST_WORKER_ID == null) {
 
 export { safeStringifyJson } from "builder-util-runtime"
 export { TmpDir } from "temp-file"
-export { log, debug } from "./log"
-export { Arch, getArchCliNames, toLinuxArchString, getArchSuffix, ArchType, archFromString, defaultArchFromString } from "./arch"
+export * from "./arch"
+export { Arch, archFromString, ArchType, defaultArchFromString, getArchCliNames, getArchSuffix, toLinuxArchString } from "./arch"
 export { AsyncTaskManager } from "./asyncTaskManager"
 export { DebugLogger } from "./DebugLogger"
+export * from "./log"
+export { httpExecutor, NodeHttpExecutor } from "./nodeHttpExecutor"
+export * from "./promise"
 
-export { copyFile, exists } from "./fs"
 export { asArray } from "builder-util-runtime"
+export * from "./fs"
 
 export { deepAssign } from "./deepAssign"
+
+export { getPath7x, getPath7za } from "./7za"
 
 export const debug7z = _debug("electron-builder:7z")
 
@@ -47,7 +52,7 @@ export function removePassword(input: string) {
   })
 }
 
-function getProcessEnv(env: { [key: string]: string | undefined } | undefined | null): NodeJS.ProcessEnv | undefined {
+function getProcessEnv(env: Record<string, string | undefined> | Nullish): NodeJS.ProcessEnv | undefined {
   if (process.platform === "win32") {
     return env == null ? undefined : env
   }
@@ -116,6 +121,10 @@ export function exec(file: string, args?: Array<string> | null, options?: ExecFi
           }
           resolve(stdout.toString())
         } else {
+          // https://github.com/npm/npm/issues/17624
+          if ((file === "npm" || file === "npm.cmd") && args?.includes("list") && args?.includes("--silent")) {
+            resolve(stdout.toString())
+          }
           let message = chalk.red(removePassword(`Exit code: ${(error as any).code}. ${error.message}`))
           if (stdout.length !== 0) {
             if (file.endsWith("wine")) {
@@ -259,18 +268,23 @@ function formatOut(text: string, title: string) {
 export class ExecError extends Error {
   alreadyLogged = false
 
-  constructor(command: string, readonly exitCode: number, out: string, errorOut: string, code = "ERR_ELECTRON_BUILDER_CANNOT_EXECUTE") {
+  constructor(
+    command: string,
+    readonly exitCode: number,
+    out: string,
+    errorOut: string,
+    code = "ERR_ELECTRON_BUILDER_CANNOT_EXECUTE"
+  ) {
     super(`${command} process failed ${code}${formatOut(String(exitCode), "Exit code")}${formatOut(out, "Output")}${formatOut(errorOut, "Error output")}`)
     ;(this as NodeJS.ErrnoException).code = code
   }
 }
 
-type Nullish = null | undefined
 export function use<T, R>(value: T | Nullish, task: (value: T) => R): R | null {
   return value == null ? null : task(value)
 }
 
-export function isEmptyOrSpaces(s: string | null | undefined): s is "" | null | undefined {
+export function isEmptyOrSpaces(s: string | Nullish): s is "" | Nullish {
   return s == null || s.trim().length === 0
 }
 
@@ -287,7 +301,7 @@ export function addValue<K, T>(map: Map<K, Array<T>>, key: K, value: T) {
   }
 }
 
-export function replaceDefault(inList: Array<string> | null | undefined, defaultList: Array<string>): Array<string> {
+export function replaceDefault(inList: Array<string> | Nullish, defaultList: Array<string>): Array<string> {
   if (inList == null || (inList.length === 1 && inList[0] === "default")) {
     return defaultList
   }
@@ -304,7 +318,7 @@ export function replaceDefault(inList: Array<string> | null | undefined, default
   return inList
 }
 
-export function getPlatformIconFileName(value: string | null | undefined, isMac: boolean) {
+export function getPlatformIconFileName(value: string | Nullish, isMac: boolean) {
   if (value === undefined) {
     return undefined
   }
@@ -335,7 +349,7 @@ export function isPullRequest() {
   )
 }
 
-export function isEnvTrue(value: string | null | undefined) {
+export function isEnvTrue(value: string | Nullish) {
   if (value != null) {
     value = value.trim()
   }
@@ -349,7 +363,7 @@ export class InvalidConfigurationError extends Error {
   }
 }
 
-export function executeAppBuilder(
+export async function executeAppBuilder(
   args: Array<string>,
   childProcessConsumer?: (childProcess: ChildProcess) => void,
   extraOptions: SpawnOptions = {},
@@ -358,7 +372,7 @@ export function executeAppBuilder(
   const command = appBuilderPath
   const env: any = {
     ...process.env,
-    SZA_PATH: path7za,
+    SZA_PATH: await getPath7za(),
     FORCE_COLOR: chalk.level === 0 ? "0" : "1",
   }
   const cacheEnv = process.env.ELECTRON_BUILDER_CACHE
@@ -396,16 +410,9 @@ export function executeAppBuilder(
   }
 }
 
-export async function retry<T>(task: () => Promise<T>, retriesLeft: number, interval: number): Promise<T> {
-  try {
-    return await task()
-  } catch (error: any) {
-    log.info(`Above command failed, retrying ${retriesLeft} more times`)
-    if (retriesLeft > 0) {
-      await new Promise(resolve => setTimeout(resolve, interval))
-      return await retry(task, retriesLeft - 1, interval)
-    } else {
-      throw error
-    }
-  }
+export async function retry<T>(task: () => Promise<T>, retryCount: number, interval: number, backoff = 0, attempt = 0, shouldRetry?: (e: any) => boolean): Promise<T> {
+  return await _retry(task, retryCount, interval, backoff, attempt, e => {
+    log.info(`Above command failed, retrying ${retryCount} more times`)
+    return shouldRetry?.(e) ?? true
+  })
 }

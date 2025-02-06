@@ -1,4 +1,4 @@
-import { exists, statOrNull } from "builder-util/out/fs"
+import { exists, statOrNull } from "builder-util"
 import * as fs from "fs/promises"
 import * as path from "path"
 
@@ -88,7 +88,7 @@ class Assertions {
       if (customErrorAssert == null) {
         expect(m).toMatchSnapshot()
       } else {
-        customErrorAssert(actualError!!)
+        customErrorAssert(actualError!)
       }
     } catch (matchError) {
       throw new Error(matchError + " " + actualError)

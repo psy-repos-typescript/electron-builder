@@ -1,23 +1,32 @@
-import BluebirdPromise from "bluebird-lst"
 import { Arch, asArray, AsyncTaskManager, InvalidConfigurationError, isEmptyOrSpaces, isPullRequest, log, safeStringifyJson, serializeToYaml } from "builder-util"
 import {
+  BitbucketOptions,
   CancellationToken,
   GenericServerOptions,
   getS3LikeProviderBaseUrl,
   GithubOptions,
   githubUrl,
   KeygenOptions,
-  SnapStoreOptions,
+  Nullish,
   PublishConfiguration,
   PublishProvider,
-  BitbucketOptions,
+  SnapStoreOptions,
 } from "builder-util-runtime"
 import _debug from "debug"
-import { getCiTag, PublishContext, Publisher, PublishOptions, UploadTask } from "electron-publish"
-import { GitHubPublisher } from "electron-publish/out/gitHubPublisher"
+import {
+  BitbucketPublisher,
+  getCiTag,
+  GitHubPublisher,
+  KeygenPublisher,
+  PublishContext,
+  Publisher,
+  PublishOptions,
+  S3Publisher,
+  SnapStorePublisher,
+  SpacesPublisher,
+  UploadTask,
+} from "electron-publish"
 import { MultiProgress } from "electron-publish/out/multiProgress"
-import S3Publisher from "./s3/s3Publisher"
-import SpacesPublisher from "./s3/spacesPublisher"
 import { writeFile } from "fs/promises"
 import * as isCi from "is-ci"
 import * as path from "path"
@@ -28,10 +37,7 @@ import { Packager } from "../packager"
 import { PlatformPackager } from "../platformPackager"
 import { expandMacro } from "../util/macroExpander"
 import { WinPackager } from "../winPackager"
-import { SnapStorePublisher } from "./SnapStorePublisher"
 import { createUpdateInfoTasks, UpdateInfoFileTask, writeUpdateInfoFiles } from "./updateInfoBuilder"
-import { KeygenPublisher } from "./KeygenPublisher"
-import { BitbucketPublisher } from "./BitbucketPublisher"
 
 const publishForPrWarning =
   "There are serious security concerns with PUBLISH_FOR_PULL_REQUEST=true (see the  CircleCI documentation (https://circleci.com/docs/1.0/fork-pr-builds/) for details)" +
@@ -62,7 +68,11 @@ export class PublishManager implements PublishContext {
 
   private readonly updateFileWriteTask: Array<UpdateInfoFileTask> = []
 
-  constructor(private readonly packager: Packager, private readonly publishOptions: PublishOptions, readonly cancellationToken: CancellationToken = packager.cancellationToken) {
+  constructor(
+    private readonly packager: Packager,
+    private readonly publishOptions: PublishOptions,
+    readonly cancellationToken: CancellationToken = packager.cancellationToken
+  ) {
     checkOptions(publishOptions.publish)
 
     this.taskManager = new AsyncTaskManager(cancellationToken)
@@ -139,7 +149,6 @@ export class PublishManager implements PublishContext {
     return await resolvePublishConfigurations(publishers, null, this.packager, null, true)
   }
 
-  /** @internal */
   scheduleUpload(publishConfig: PublishConfiguration, event: UploadTask, appInfo: AppInfo): void {
     if (publishConfig.provider === "generic") {
       return
@@ -149,7 +158,7 @@ export class PublishManager implements PublishContext {
     if (publisher == null) {
       log.debug(
         {
-          file: event.file,
+          file: log.filePath(event.file),
           reason: "publisher is null",
           publishConfig: safeStringifyJson(publishConfig),
         },
@@ -160,7 +169,7 @@ export class PublishManager implements PublishContext {
 
     const providerName = publisher.providerName
     if (this.publishOptions.publish === "onTagOrDraft" && getCiTag() == null && providerName !== "bitbucket" && providerName !== "github") {
-      log.info({ file: event.file, reason: "current build is not for a git tag", publishPolicy: "onTagOrDraft" }, `not published to ${providerName}`)
+      log.info({ file: log.filePath(event.file), reason: "current build is not for a git tag", publishPolicy: "onTagOrDraft" }, `not published to ${providerName}`)
       return
     }
 
@@ -254,7 +263,7 @@ export async function getAppUpdatePublishConfiguration(packager: PlatformPackage
 
   if (packager.platform === Platform.WINDOWS && publishConfig.publisherName == null) {
     const winPackager = packager as WinPackager
-    const publisherName = winPackager.isForceCodeSigningVerification ? await winPackager.computedPublisherName.value : undefined
+    const publisherName = winPackager.isForceCodeSigningVerification ? await (await winPackager.signingManager.value).computedPublisherName.value : undefined
     if (publisherName != null) {
       publishConfig.publisherName = publisherName
     }
@@ -342,8 +351,8 @@ function requireProviderClass(provider: string, packager: Packager): any | null 
       let module: any = null
       try {
         module = require(path.join(packager.buildResourcesDir, name + ".js"))
-      } catch (ignored) {
-        console.log(ignored)
+      } catch (_ignored) {
+        log.debug({ path: path.join(packager.buildResourcesDir, name + ".js") }, "Unable to find publish provider in build resources")
       }
 
       if (module == null) {
@@ -381,7 +390,7 @@ export function computeDownloadUrl(publishConfiguration: PublishConfiguration, f
 
 export async function getPublishConfigs(
   platformPackager: PlatformPackager<any>,
-  targetSpecificOptions: PlatformSpecificBuildOptions | null | undefined,
+  targetSpecificOptions: PlatformSpecificBuildOptions | Nullish,
   arch: Arch | null,
   errorIfCannot: boolean
 ): Promise<Array<PublishConfiguration> | null> {
@@ -445,9 +454,9 @@ async function resolvePublishConfigurations(
   }
 
   debug(`Explicit publish provider: ${safeStringifyJson(publishers)}`)
-  return await (BluebirdPromise.map(asArray(publishers), it =>
-    getResolvedPublishConfig(platformPackager, packager, typeof it === "string" ? { provider: it } : it, arch, errorIfCannot)
-  ) as Promise<Array<PublishConfiguration>>)
+  return (await Promise.all(
+    asArray(publishers).map(it => getResolvedPublishConfig(platformPackager, packager, typeof it === "string" ? { provider: it } : it, arch, errorIfCannot))
+  )) as PublishConfiguration[]
 }
 
 function isSuitableWindowsTarget(target: Target) {
@@ -542,7 +551,7 @@ async function getResolvedPublishConfig(
       return info
     }
 
-    const message = `Cannot detect repository by .git/config. Please specify "repository" in the package.json (https://docs.npmjs.com/files/package.json#repository).\nPlease see https://electron.build/configuration/publish`
+    const message = `Cannot detect repository by .git/config. Please specify "repository" in the package.json (https://docs.npmjs.com/files/package.json#repository).\nPlease see https://electron.build/publish`
     if (errorIfCannot) {
       throw new Error(message)
     } else {

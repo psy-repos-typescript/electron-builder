@@ -1,8 +1,21 @@
-import { path7za } from "7zip-bin"
-import BluebirdPromise from "bluebird-lst"
-import { Arch, asArray, AsyncTaskManager, exec, executeAppBuilder, getPlatformIconFileName, InvalidConfigurationError, log, spawnAndWrite, use } from "builder-util"
+import {
+  Arch,
+  asArray,
+  AsyncTaskManager,
+  exec,
+  executeAppBuilder,
+  exists,
+  getArchSuffix,
+  getPath7za,
+  getPlatformIconFileName,
+  InvalidConfigurationError,
+  log,
+  spawnAndWrite,
+  statOrNull,
+  use,
+  walk,
+} from "builder-util"
 import { CURRENT_APP_INSTALLER_FILE_NAME, CURRENT_APP_PACKAGE_FILE_NAME, PackageFileInfo, UUID } from "builder-util-runtime"
-import { exists, statOrNull, walk } from "builder-util/out/fs"
 import _debug from "debug"
 import * as fs from "fs"
 import { readFile, stat, unlink } from "fs-extra"
@@ -10,7 +23,7 @@ import * as path from "path"
 import { getBinFromUrl } from "../../binDownload"
 import { Target } from "../../core"
 import { DesktopShortcutCreationPolicy, getEffectiveOptions } from "../../options/CommonWindowsInstallerConfiguration"
-import { computeSafeArtifactNameIfNeeded, normalizeExt } from "../../platformPackager"
+import { chooseNotNull, computeSafeArtifactNameIfNeeded, normalizeExt } from "../../platformPackager"
 import { hashFile } from "../../util/hash"
 import { isMacOsCatalina } from "../../util/macosVersion"
 import { time } from "../../util/timer"
@@ -25,7 +38,7 @@ import { addCustomMessageFileInclude, createAddLangsMacro, LangConfigurator } fr
 import { computeLicensePage } from "./nsisLicense"
 import { NsisOptions, PortableOptions } from "./nsisOptions"
 import { NsisScriptGenerator } from "./nsisScriptGenerator"
-import { AppPackageHelper, nsisTemplatesDir, NSIS_PATH, UninstallerReader, NsisTargetOptions } from "./nsisUtil"
+import { AppPackageHelper, NSIS_PATH, NsisTargetOptions, nsisTemplatesDir, UninstallerReader } from "./nsisUtil"
 
 const debug = _debug("electron-builder:nsis")
 
@@ -42,8 +55,14 @@ export class NsisTarget extends Target {
 
   /** @private */
   readonly archs: Map<Arch, string> = new Map()
+  readonly isAsyncSupported = false
 
-  constructor(readonly packager: WinPackager, readonly outDir: string, targetName: string, protected readonly packageHelper: AppPackageHelper) {
+  constructor(
+    readonly packager: WinPackager,
+    readonly outDir: string,
+    targetName: string,
+    protected readonly packageHelper: AppPackageHelper
+  ) {
     super(targetName)
 
     this.packageHelper.refCount++
@@ -68,8 +87,16 @@ export class NsisTarget extends Target {
     NsisTargetOptions.resolve(this.options)
   }
 
+  get shouldBuildUniversalInstaller() {
+    const buildSeparateInstallers = this.options.buildUniversalInstaller === false
+    return !buildSeparateInstallers
+  }
+
   build(appOutDir: string, arch: Arch) {
     this.archs.set(arch, appOutDir)
+    if (!this.shouldBuildUniversalInstaller) {
+      return this.buildInstaller(new Map<Arch, string>().set(arch, appOutDir))
+    }
     return Promise.resolve()
   }
 
@@ -112,9 +139,11 @@ export class NsisTarget extends Target {
     }
   }
 
-  protected get installerFilenamePattern(): string {
-    // tslint:disable:no-invalid-template-strings
-    return "${productName} " + (this.isPortable ? "" : "Setup ") + "${version}.${ext}"
+  protected installerFilenamePattern(primaryArch?: Arch | null, defaultArch?: string): string {
+    const setupText = this.isPortable ? "" : "Setup "
+    const archSuffix = !this.shouldBuildUniversalInstaller && primaryArch != null ? getArchSuffix(primaryArch, defaultArch) : ""
+
+    return "${productName} " + setupText + "${version}" + archSuffix + ".${ext}"
   }
 
   private get isPortable(): boolean {
@@ -122,8 +151,11 @@ export class NsisTarget extends Target {
   }
 
   async finishBuild(): Promise<any> {
+    if (!this.shouldBuildUniversalInstaller) {
+      return this.packageHelper.finishBuild()
+    }
     try {
-      const { pattern } = this.packager.artifactPatternConfig(this.options, this.installerFilenamePattern)
+      const { pattern } = this.packager.artifactPatternConfig(this.options, this.installerFilenamePattern())
       const builds = new Set([this.archs])
       if (pattern.includes("${arch}") && this.archs.size > 1) {
         ;[...this.archs].forEach(([arch, appOutDir]) => builds.add(new Map().set(arch, appOutDir)))
@@ -138,18 +170,12 @@ export class NsisTarget extends Target {
   }
 
   private async buildInstaller(archs: Map<Arch, string>): Promise<any> {
-    const primaryArch = archs.size === 1 ? archs.keys().next().value : null
+    const primaryArch: Arch | null = archs.size === 1 ? (archs.keys().next().value ?? null) : null
     const packager = this.packager
     const appInfo = packager.appInfo
     const options = this.options
-    const installerFilename = packager.expandArtifactNamePattern(
-      options,
-      "exe",
-      primaryArch,
-      this.installerFilenamePattern,
-      false,
-      this.packager.platformSpecificBuildOptions.defaultArch
-    )
+    const defaultArch = chooseNotNull(this.packager.platformSpecificBuildOptions.defaultArch, this.packager.config.defaultArch) ?? undefined
+    const installerFilename = packager.expandArtifactNamePattern(options, "exe", primaryArch, this.installerFilenamePattern(primaryArch, defaultArch), false, defaultArch)
     const oneClick = options.oneClick !== false
     const installerPath = path.join(this.outDir, installerFilename)
 
@@ -226,35 +252,42 @@ export class NsisTarget extends Target {
         defines[arch === Arch.x64 ? "APP_DIR_64" : arch === Arch.arm64 ? "APP_DIR_ARM64" : "APP_DIR_32"] = dir
       }
     } else if (USE_NSIS_BUILT_IN_COMPRESSOR && archs.size === 1) {
-      defines.APP_BUILD_DIR = archs.get(archs.keys().next().value)
+      const value: Arch | undefined = archs.keys().next().value
+      use(value, v => (defines.APP_BUILD_DIR = archs.get(v)))
     } else {
-      await BluebirdPromise.map(archs.keys(), async arch => {
-        const fileInfo = await this.packageHelper.packArch(arch, this)
-        const file = fileInfo.path
-        const defineKey = arch === Arch.x64 ? "APP_64" : arch === Arch.arm64 ? "APP_ARM64" : "APP_32"
-        defines[defineKey] = file
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-        const defineNameKey = `${defineKey}_NAME` as "APP_64_NAME" | "APP_ARM64_NAME" | "APP_32_NAME"
-        defines[defineNameKey] = path.basename(file)
-        // nsis expect a hexadecimal string
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-        const defineHashKey = `${defineKey}_HASH` as "APP_64_HASH" | "APP_ARM64_HASH" | "APP_32_HASH"
-        defines[defineHashKey] = Buffer.from(fileInfo.sha512, "base64").toString("hex").toUpperCase()
+      await Promise.all(
+        Array.from(archs.keys()).map(async arch => {
+          const { fileInfo, unpackedSize } = await this.packageHelper.packArch(arch, this)
+          const file = fileInfo.path
+          const defineKey = arch === Arch.x64 ? "APP_64" : arch === Arch.arm64 ? "APP_ARM64" : "APP_32"
+          defines[defineKey] = file
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+          const defineNameKey = `${defineKey}_NAME` as "APP_64_NAME" | "APP_ARM64_NAME" | "APP_32_NAME"
+          defines[defineNameKey] = path.basename(file)
+          // nsis expect a hexadecimal string
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+          const defineHashKey = `${defineKey}_HASH` as "APP_64_HASH" | "APP_ARM64_HASH" | "APP_32_HASH"
+          defines[defineHashKey] = Buffer.from(fileInfo.sha512, "base64").toString("hex").toUpperCase()
+          // NSIS accepts size in KiloBytes and supports only whole numbers
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+          const defineUnpackedSizeKey = `${defineKey}_UNPACKED_SIZE` as "APP_64_UNPACKED_SIZE" | "APP_ARM64_UNPACKED_SIZE" | "APP_32_UNPACKED_SIZE"
+          defines[defineUnpackedSizeKey] = Math.ceil(unpackedSize / 1024).toString()
 
-        if (this.isWebInstaller) {
-          await packager.dispatchArtifactCreated(file, this, arch)
-          packageFiles[Arch[arch]] = fileInfo
-        }
-
-        const archiveInfo = (await exec(path7za, ["l", file])).trim()
-        // after adding blockmap data will be "Warnings: 1" in the end of output
-        const match = /(\d+)\s+\d+\s+\d+\s+files/.exec(archiveInfo)
-        if (match == null) {
-          log.warn({ output: archiveInfo }, "cannot compute size of app package")
-        } else {
-          estimatedSize += parseInt(match[1], 10)
-        }
-      })
+          if (this.isWebInstaller) {
+            await packager.dispatchArtifactCreated(file, this, arch)
+            packageFiles[Arch[arch]] = fileInfo
+          }
+          const path7za = await getPath7za()
+          const archiveInfo = (await exec(path7za, ["l", file])).trim()
+          // after adding blockmap data will be "Warnings: 1" in the end of output
+          const match = /(\d+)\s+\d+\s+\d+\s+files/.exec(archiveInfo)
+          if (match == null) {
+            log.warn({ output: archiveInfo }, "cannot compute size of app package")
+          } else {
+            estimatedSize += parseInt(match[1], 10)
+          }
+        })
+      )
     }
 
     this.configureDefinesForAllTypeOfInstaller(defines)
@@ -318,7 +351,7 @@ export class NsisTarget extends Target {
     await this.executeMakensis(defines, commands, sharedHeader + (await this.computeFinalScript(script, true, archs)))
     await Promise.all<any>([packager.sign(installerPath), defines.UNINSTALLER_OUT_FILE == null ? Promise.resolve() : unlink(defines.UNINSTALLER_OUT_FILE)])
 
-    const safeArtifactName = computeSafeArtifactNameIfNeeded(installerFilename, () => this.generateGitHubInstallerName())
+    const safeArtifactName = computeSafeArtifactNameIfNeeded(installerFilename, () => this.generateGitHubInstallerName(primaryArch, defaultArch))
     let updateInfo: any
     if (this.isWebInstaller) {
       updateInfo = createNsisWebDifferentialUpdateInfo(installerPath, packageFiles)
@@ -341,10 +374,11 @@ export class NsisTarget extends Target {
     })
   }
 
-  protected generateGitHubInstallerName(): string {
+  protected generateGitHubInstallerName(primaryArch: Arch | null, defaultArch: string | undefined): string {
     const appInfo = this.packager.appInfo
     const classifier = appInfo.name.toLowerCase() === appInfo.name ? "setup-" : "Setup-"
-    return `${appInfo.name}-${this.isPortable ? "" : classifier}${appInfo.version}.exe`
+    const archSuffix = !this.shouldBuildUniversalInstaller && primaryArch != null ? getArchSuffix(primaryArch, defaultArch) : ""
+    return `${appInfo.name}-${this.isPortable ? "" : classifier}${appInfo.version}${archSuffix}.exe`
   }
 
   private get isUnicodeEnabled(): boolean {
@@ -386,14 +420,13 @@ export class NsisTarget extends Target {
         let i = 0
         while (!(await exists(uninstallerPath)) && i++ < 100) {
           // noinspection JSUnusedLocalSymbols
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           await new Promise((resolve, _reject) => setTimeout(resolve, 300))
         }
       }
     } else {
       await execWine(installerPath, null, [], { env: { __COMPAT_LAYER: "RunAsInvoker" } })
     }
-    await packager.sign(uninstallerPath, "  Signing NSIS uninstaller")
+    await packager.sign(uninstallerPath)
 
     delete defines.BUILD_UNINSTALLER
     // platform-specific path, not wine
@@ -468,6 +501,10 @@ export class NsisTarget extends Target {
 
     if (options.perMachine === true) {
       defines.INSTALL_MODE_PER_ALL_USERS = null
+    }
+
+    if (options.selectPerMachineByDefault === true) {
+      defines.INSTALL_MODE_PER_ALL_USERS_DEFAULT = null
     }
 
     if (!oneClick || options.perMachine === true) {
@@ -556,7 +593,7 @@ export class NsisTarget extends Target {
     const args: Array<string> = this.options.warningsAsErrors === false ? [] : ["-WX"]
     args.push("-INPUTCHARSET", "UTF8")
     for (const name of Object.keys(defines)) {
-      const value = defines[name as keyof Defines]
+      const value: any = defines[name as keyof Defines]
       if (value == null) {
         args.push(`-D${name}`)
       } else {

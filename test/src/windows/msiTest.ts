@@ -1,6 +1,6 @@
-import { app } from "../helpers/packTester"
 import { Platform } from "electron-builder"
 import * as fs from "fs"
+import { app } from "../helpers/packTester"
 
 test.ifAll.ifDevOrWinCi(
   "msi",
@@ -13,6 +13,16 @@ test.ifAll.ifDevOrWinCi(
           // version: "1.0.0",
         },
         productName: "Test MSI",
+        electronFuses: {
+          runAsNode: true,
+          enableCookieEncryption: true,
+          enableNodeOptionsEnvironmentVariable: true,
+          enableNodeCliInspectArguments: true,
+          enableEmbeddedAsarIntegrityValidation: true,
+          onlyLoadAppFromAsar: true,
+          loadBrowserProcessSpecificV8Snapshot: true,
+          grantFileProtocolExtraPrivileges: undefined, // unsupported on current electron version in our tests
+        },
       },
     },
     {
@@ -79,9 +89,7 @@ test.ifAll.ifDevOrWinCi(
         msiProjectCreated: async path => {
           await fs.promises.writeFile(
             path,
-            (
-              await fs.promises.readFile(path, "utf8")
-            ).replace(
+            (await fs.promises.readFile(path, "utf8")).replace(
               "</Product>",
               `<util:CloseApplication xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
               PromptToContinue="no"

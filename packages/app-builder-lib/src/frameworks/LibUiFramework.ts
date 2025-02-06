@@ -1,12 +1,12 @@
-import { emptyDir } from "fs-extra"
-import { mkdir, chmod, rename, writeFile } from "fs/promises"
-import * as path from "path"
 import { executeAppBuilder } from "builder-util"
+import { emptyDir } from "fs-extra"
+import { chmod, mkdir, rename, writeFile } from "fs/promises"
+import * as path from "path"
 import { AfterPackContext } from "../configuration"
 import { Platform } from "../core"
 import { Framework, PrepareApplicationStageDirectoryOptions } from "../Framework"
 import { LinuxPackager } from "../linuxPackager"
-import MacPackager from "../macPackager"
+import { MacPackager } from "../macPackager"
 import { executeAppBuilderAndWriteJson } from "../util/appBuilder"
 
 export class LibUiFramework implements Framework {
@@ -22,7 +22,11 @@ export class LibUiFramework implements Framework {
   // noinspection JSUnusedGlobalSymbols
   readonly isNpmRebuildRequired = false
 
-  constructor(readonly version: string, readonly distMacOsAppName: string, protected readonly isUseLaunchUi: boolean) {}
+  constructor(
+    readonly version: string,
+    readonly distMacOsAppName: string,
+    protected readonly isUseLaunchUi: boolean
+  ) {}
 
   async prepareApplicationStageDirectory(options: PrepareApplicationStageDirectoryOptions) {
     await emptyDir(options.appOutDir)
