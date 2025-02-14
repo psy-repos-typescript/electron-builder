@@ -1,4 +1,4 @@
-import { Platform, Arch } from "electron-builder"
+import { Arch, Platform } from "electron-builder"
 import * as path from "path"
 import { app, copyTestAsset, getFixtureDir } from "../helpers/packTester"
 
@@ -11,6 +11,16 @@ test.ifAll.ifNotCiMac(
       publish: null,
       nsis: {
         differentialPackage: false,
+      },
+      electronFuses: {
+        runAsNode: true,
+        enableCookieEncryption: true,
+        enableNodeOptionsEnvironmentVariable: true,
+        enableNodeCliInspectArguments: true,
+        enableEmbeddedAsarIntegrityValidation: true,
+        onlyLoadAppFromAsar: true,
+        loadBrowserProcessSpecificV8Snapshot: true,
+        grantFileProtocolExtraPrivileges: undefined, // unsupported on current electron version in our tests
       },
     },
   })

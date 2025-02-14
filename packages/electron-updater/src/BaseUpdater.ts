@@ -37,18 +37,22 @@ export abstract class BaseUpdater extends AppUpdater {
     })
   }
 
+  protected get installerPath(): string | null {
+    return this.downloadedUpdateHelper == null ? null : this.downloadedUpdateHelper.file
+  }
+
   // must be sync
   protected abstract doInstall(options: InstallOptions): boolean
 
   // must be sync (because quit even handler is not async)
-  protected install(isSilent: boolean, isForceRunAfter: boolean): boolean {
+  install(isSilent = false, isForceRunAfter = false): boolean {
     if (this.quitAndInstallCalled) {
       this._logger.warn("install call ignored: quitAndInstallCalled is set to true")
       return false
     }
 
     const downloadedUpdateHelper = this.downloadedUpdateHelper
-    const installerPath = downloadedUpdateHelper == null ? null : downloadedUpdateHelper.file
+    const installerPath = this.installerPath
     const downloadedFileInfo = downloadedUpdateHelper == null ? null : downloadedUpdateHelper.downloadedFileInfo
     if (installerPath == null || downloadedFileInfo == null) {
       this.dispatchError(new Error("No valid update available, can't quit and install"))
@@ -61,7 +65,6 @@ export abstract class BaseUpdater extends AppUpdater {
     try {
       this._logger.info(`Install: isSilent: ${isSilent}, isForceRunAfter: ${isForceRunAfter}`)
       return this.doInstall({
-        installerPath,
         isSilent,
         isForceRunAfter,
         isAdminRightsRequired: downloadedFileInfo.isAdminRightsRequired,
@@ -119,7 +122,6 @@ export abstract class BaseUpdater extends AppUpdater {
   protected spawnSyncLog(cmd: string, args: string[] = [], env = {}): string {
     this._logger.info(`Executing: ${cmd} with args: ${args}`)
     const response = spawnSync(cmd, args, {
-      stdio: "inherit",
       env: { ...process.env, ...env },
       encoding: "utf-8",
       shell: true,
@@ -155,7 +157,6 @@ export abstract class BaseUpdater extends AppUpdater {
 }
 
 export interface InstallOptions {
-  readonly installerPath: string
   readonly isSilent: boolean
   readonly isForceRunAfter: boolean
   readonly isAdminRightsRequired: boolean

@@ -15,7 +15,10 @@ export default class MsiWrappedTarget extends MsiTarget {
   /** @private */
   private readonly archs: Map<Arch, string> = new Map()
 
-  constructor(packager: WinPackager, readonly outDir: string) {
+  constructor(
+    packager: WinPackager,
+    readonly outDir: string
+  ) {
     // must be synchronous so it can run after nsis
     super(packager, outDir, "msiWrapped", false)
   }
@@ -38,7 +41,14 @@ export default class MsiWrappedTarget extends MsiTarget {
 
     const target = config.win.target
     const nsisTarget = "nsis"
-    if (!target.some((t: TargetConfiguration | string) => (typeof t === "string" && t === nsisTarget) || (t as TargetConfiguration).target === nsisTarget)) {
+    if (
+      !target
+        .map((t: TargetConfiguration | string): string => {
+          const result: string = typeof t === "string" ? t : t.target
+          return result.toLowerCase().trim()
+        })
+        .some(t => t === nsisTarget)
+    ) {
       throw new Error("No nsis target found! Please specify an nsis target")
     }
   }
@@ -52,7 +62,7 @@ export default class MsiWrappedTarget extends MsiTarget {
     // this target invokes `build` in `finishBuild` to guarantee
     // that the dependent target has already been built
     // this also affords us re-usability
-    const [arch, appOutDir] = this.archs.entries().next().value
+    const [arch, appOutDir] = this.archs.entries().next().value!
 
     this.validatePrerequisites()
 

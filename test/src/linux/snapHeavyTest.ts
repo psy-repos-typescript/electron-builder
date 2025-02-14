@@ -1,4 +1,4 @@
-import { Platform, Arch } from "app-builder-lib"
+import { Arch, Platform } from "app-builder-lib"
 import { app, snapTarget } from "../helpers/packTester"
 
 // very slow
@@ -20,6 +20,16 @@ test.ifAll(
       productName: "Snap Electron App (full build)",
       snap: {
         useTemplateApp: false,
+      },
+      electronFuses: {
+        runAsNode: true,
+        enableCookieEncryption: true,
+        enableNodeOptionsEnvironmentVariable: true,
+        enableNodeCliInspectArguments: true,
+        enableEmbeddedAsarIntegrityValidation: true,
+        onlyLoadAppFromAsar: true,
+        loadBrowserProcessSpecificV8Snapshot: true,
+        grantFileProtocolExtraPrivileges: undefined, // unsupported on current electron version in our tests
       },
     },
   })

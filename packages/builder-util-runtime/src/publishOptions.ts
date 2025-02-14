@@ -1,4 +1,5 @@
 import { OutgoingHttpHeaders } from "http"
+import { Nullish } from "."
 
 export type PublishProvider = "github" | "s3" | "spaces" | "generic" | "custom" | "snapStore" | "keygen" | "bitbucket"
 
@@ -112,12 +113,12 @@ export interface GithubOptions extends PublishConfiguration {
   readonly protocol?: "https" | "http" | null
 
   /**
-   * The access token to support auto-update from private github repositories. Never specify it in the configuration files. Only for [setFeedURL](/auto-update#appupdatersetfeedurloptions).
+   * The access token to support auto-update from private github repositories. Never specify it in the configuration files. Only for [setFeedURL](./auto-update.md#appupdatersetfeedurloptions).
    */
   readonly token?: string | null
 
   /**
-   * Whether to use private github auto-update provider if `GH_TOKEN` environment variable is defined. See [Private GitHub Update Repo](/auto-update#private-github-update-repo).
+   * Whether to use private github auto-update provider if `GH_TOKEN` environment variable is defined. See [Private GitHub Update Repo](./auto-update.md#private-github-update-repo).
    */
   readonly private?: boolean | null
 
@@ -143,7 +144,7 @@ export function githubUrl(options: GithubOptions, defaultHost = "github.com") {
 
 /**
  * Generic (any HTTP(S) server) options.
- * In all publish options [File Macros](/file-patterns#file-macros) are supported.
+ * In all publish options [File Macros](./file-patterns.md#file-macros) are supported.
  */
 export interface GenericServerOptions extends PublishConfiguration {
   /**
@@ -180,6 +181,12 @@ export interface KeygenOptions extends PublishConfiguration {
   readonly provider: "keygen"
 
   /**
+   * Keygen host for self-hosted instances
+   * @default "api.keygen.sh"
+   */
+  readonly host?: string
+
+  /**
    * Keygen account's UUID
    */
   readonly account: string
@@ -205,7 +212,7 @@ export interface KeygenOptions extends PublishConfiguration {
  * Bitbucket options.
  * https://bitbucket.org/
  * Define `BITBUCKET_TOKEN` environment variable.
- * 
+ *
  * For converting an app password to a usable token, you can utilize this
 ```typescript
 convertAppPassword(owner: string, appPassword: string) {
@@ -226,7 +233,7 @@ export interface BitbucketOptions extends PublishConfiguration {
   readonly owner: string
 
   /**
-   * The app password (account>settings>app-passwords) to support auto-update from private bitbucket repositories.
+   * The [app password](https://bitbucket.org/account/settings/app-passwords) to support auto-update from private bitbucket repositories.
    */
   readonly token?: string | null
 
@@ -248,7 +255,7 @@ export interface BitbucketOptions extends PublishConfiguration {
 }
 
 /**
- * [Snap Store](https://snapcraft.io/) options.
+ * [Snap Store](https://snapcraft.io/) options. To publish directly to Snapcraft, see <a href="https://snapcraft.io/docs/snapcraft-authentication">Snapcraft authentication options</a> for local or CI/CD authentication options.
  */
 export interface SnapStoreOptions extends PublishConfiguration {
   /**
@@ -294,9 +301,9 @@ export interface BaseS3Options extends PublishConfiguration {
  * AWS credentials are required, please see [getting your credentials](http://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/getting-your-credentials.html).
  * Define `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` [environment variables](http://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/loading-node-credentials-environment.html).
  * Or in the [~/.aws/credentials](http://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/loading-node-credentials-shared.html).
- * 
+ *
  * Example configuration:
- * 
+ *
 ```json
 {
   "build":
@@ -356,6 +363,12 @@ export interface S3Options extends BaseS3Options {
    *  ${bucketname}.s3-accelerate.amazonaws.com
    */
   readonly accelerate?: boolean
+
+  /**
+   * When true, force a path-style endpoint to be used where the bucket name is part of the path.
+   * [Path-style Access](https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html#path-style-access)
+   */
+  readonly forcePathStyle?: boolean
 }
 
 /**
@@ -415,7 +428,7 @@ function s3Url(options: S3Options) {
   return appendPath(url, options.path)
 }
 
-function appendPath(url: string, p: string | null | undefined): string {
+function appendPath(url: string, p: string | Nullish): string {
   if (p != null && p.length > 0) {
     if (!p.startsWith("/")) {
       url += "/"

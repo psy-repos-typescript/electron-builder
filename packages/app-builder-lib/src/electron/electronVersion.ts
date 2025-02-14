@@ -1,16 +1,16 @@
-import { getProjectRootPath } from "@electron/rebuild/lib/src/search-module"
-import { InvalidConfigurationError, log } from "builder-util"
+import { getProjectRootPath } from "@electron/rebuild/lib/search-module"
+
+import { httpExecutor, InvalidConfigurationError, log } from "builder-util"
 import { parseXml } from "builder-util-runtime"
-import { httpExecutor } from "builder-util/out/nodeHttpExecutor"
 import { readJson } from "fs-extra"
 import { Lazy } from "lazy-val"
 import * as path from "path"
-import { orNullIfFileNotExist } from "read-config-file"
 import * as semver from "semver"
 import { Configuration } from "../configuration"
-import { getConfig } from "../util/config"
+import { getConfig } from "../util/config/config"
+import { orNullIfFileNotExist } from "../util/config/load"
 
-export type MetadataValue = Lazy<{ [key: string]: any } | null>
+export type MetadataValue = Lazy<Record<string, any> | null>
 
 const electronPackages = ["electron", "electron-prebuilt", "electron-prebuilt-compile", "electron-nightly"]
 
@@ -59,7 +59,7 @@ export async function computeElectronVersion(projectDir: string): Promise<string
 
   const potentialRootDirs = [projectDir, await getProjectRootPath(projectDir)]
   let dependency: NameAndVersion | null = null
-  for await (const dir of potentialRootDirs) {
+  for (const dir of potentialRootDirs) {
     const metadata = await orNullIfFileNotExist(readJson(path.join(dir, "package.json")))
     dependency = metadata ? findFromPackageMetadata(metadata) : null
     if (dependency) {
@@ -108,7 +108,7 @@ export async function computeElectronVersion(projectDir: string): Promise<string
     )
   }
 
-  return semver.coerce(version)!.toString()
+  return semver.coerce(version)!.format()
 }
 
 interface NameAndVersion {

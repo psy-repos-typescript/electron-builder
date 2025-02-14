@@ -6,11 +6,13 @@ import { URL } from "url"
 import { AppUpdater } from "./AppUpdater"
 import { LoginCallback } from "./electronHttpExecutor"
 
+export { BaseUpdater } from "./BaseUpdater"
 export { AppUpdater, NoOpLogger } from "./AppUpdater"
 export { CancellationToken, PackageFileInfo, ProgressInfo, UpdateFileInfo, UpdateInfo }
 export { Provider } from "./providers/Provider"
 export { AppImageUpdater } from "./AppImageUpdater"
 export { DebUpdater } from "./DebUpdater"
+export { PacmanUpdater } from "./PacmanUpdater"
 export { RpmUpdater } from "./RpmUpdater"
 export { MacUpdater } from "./MacUpdater"
 export { NsisUpdater } from "./NsisUpdater"
@@ -30,7 +32,7 @@ function doLoadAutoUpdater(): AppUpdater {
   } else {
     _autoUpdater = new (require("./AppImageUpdater").AppImageUpdater)()
     try {
-      const identity = path.join(process.resourcesPath!, "package-type")
+      const identity = path.join(process.resourcesPath, "package-type")
       if (!existsSync(identity)) {
         return _autoUpdater
       }
@@ -43,6 +45,9 @@ function doLoadAutoUpdater(): AppUpdater {
           break
         case "rpm":
           _autoUpdater = new (require("./RpmUpdater").RpmUpdater)()
+          break
+        case "pacman":
+          _autoUpdater = new (require("./PacmanUpdater").PacmanUpdater)()
           break
         default:
           break
@@ -72,6 +77,8 @@ export interface ResolvedUpdateFileInfo {
 }
 
 export interface UpdateCheckResult {
+  readonly isUpdateAvailable: boolean
+
   readonly updateInfo: UpdateInfo
 
   readonly downloadPromise?: Promise<Array<string>> | null
@@ -139,7 +146,10 @@ export interface Logger {
   debug?(message: string): void
 }
 
-// return null if verify signature succeed
-// return error message if verify signature failed
+/**
+ * return null if verify signature succeed
+ * return error message if verify signature failed
+ */
+export type VerifyUpdateCodeSignature = (publisherName: string[], path: string) => Promise<string | null>
 
-export type verifyUpdateCodeSignature = (publisherName: string[], path: string) => Promise<string | null>
+export type VerifyUpdateSupport = (updateInfo: UpdateInfo) => boolean | Promise<boolean>

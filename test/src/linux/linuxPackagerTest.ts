@@ -1,11 +1,11 @@
+import { GenericServerOptions } from "builder-util-runtime"
 import { Arch, build, Platform } from "electron-builder"
 import { outputFile } from "fs-extra"
+import * as fs from "fs/promises"
 import * as path from "path"
-import { GenericServerOptions } from "builder-util-runtime"
 import { assertThat } from "../helpers/fileAssert"
 import { app, appThrows, copyTestAsset, modifyPackageJson } from "../helpers/packTester"
 import { ELECTRON_VERSION } from "../helpers/testConfig"
-import * as fs from "fs/promises"
 
 const appImageTarget = Platform.LINUX.createTarget("appimage")
 
@@ -20,23 +20,22 @@ test.ifNotWindows(
   app({
     targets: appImageTarget,
     config: {
-      downloadAlternateFFmpeg: true,
-      publish: testPublishConfig,
-    },
-  })
-)
-
-// also test os macro in output dir
-test.ifAll.ifNotWindows.ifNotCiMac(
-  "AppImage ia32",
-  app({
-    targets: Platform.LINUX.createTarget("Appimage", Arch.ia32),
-    config: {
       directories: {
         // tslint:disable:no-invalid-template-strings
         output: "dist/${os}",
       },
+      downloadAlternateFFmpeg: true,
       publish: testPublishConfig,
+      electronFuses: {
+        runAsNode: true,
+        enableCookieEncryption: true,
+        enableNodeOptionsEnvironmentVariable: true,
+        enableNodeCliInspectArguments: true,
+        enableEmbeddedAsarIntegrityValidation: true,
+        onlyLoadAppFromAsar: true,
+        loadBrowserProcessSpecificV8Snapshot: true,
+        grantFileProtocolExtraPrivileges: undefined, // unsupported on current electron version in our tests
+      },
     },
   })
 )
@@ -107,7 +106,7 @@ test.ifNotWindows.ifNotCiMac.ifAll(
         <html lang="en">
         <body>
           <a href="https://example.com">Test link</a>
-        </body>      
+        </body>
         </html>`
         )
       },
@@ -123,14 +122,40 @@ test.ifNotWindows.ifNotCiMac(
       config: {
         linux: {
           executableName: "Foo",
+          // Example Spec: https://specifications.freedesktop.org/desktop-entry-spec/latest/example.html
           desktop: {
-            "X-Foo": "bar",
-            Terminal: "true",
+            entry: {
+              "X-Foo": "bar",
+              Terminal: "true",
+            },
+            desktopActions: {
+              Gallery: {
+                Exec: "fooview --gallery",
+                Name: "Browse Gallery",
+              },
+              Create: {
+                Exec: "fooview --create-new",
+                Name: "Create a new Foo!",
+                Icon: "fooview-new",
+              },
+              EmptyEntry: {},
+              NullEntry: null,
+            },
           },
         },
         appImage: {
           // tslint:disable-next-line:no-invalid-template-strings
           artifactName: "boo-${productName}",
+        },
+        electronFuses: {
+          runAsNode: true,
+          enableCookieEncryption: true,
+          enableNodeOptionsEnvironmentVariable: true,
+          enableNodeCliInspectArguments: true,
+          enableEmbeddedAsarIntegrityValidation: true,
+          onlyLoadAppFromAsar: true,
+          loadBrowserProcessSpecificV8Snapshot: true,
+          grantFileProtocolExtraPrivileges: undefined, // unsupported on current electron version in our tests
         },
       },
       effectiveOptionComputed: async it => {
@@ -304,7 +329,9 @@ test.ifNotWindows(
     config: {
       linux: {
         desktop: {
-          Exec: "foo",
+          entry: {
+            Exec: "foo",
+          },
         },
       },
     },

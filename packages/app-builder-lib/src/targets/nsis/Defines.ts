@@ -1,5 +1,5 @@
-import { PortableOptions } from "./nsisOptions"
 import { PathLike } from "fs"
+import { PortableOptions } from "./nsisOptions"
 /**
  * Parameters declared as environment variables in NSIS scripts.
  * The documentation vaguely explains "All other electron-builder specific flags (e.g. ONE_CLICK) are still defined."
@@ -44,6 +44,10 @@ export type Defines = {
   APP_ARM64_HASH?: string
   APP_32_HASH?: string
 
+  APP_64_UNPACKED_SIZE?: string
+  APP_ARM64_UNPACKED_SIZE?: string
+  APP_32_UNPACKED_SIZE?: string
+
   REQUEST_EXECUTION_LEVEL?: PortableOptions["requestExecutionLevel"]
 
   UNPACK_DIR_NAME?: string | false
@@ -72,6 +76,7 @@ export type Defines = {
   MULTIUSER_INSTALLMODE_ALLOW_ELEVATION?: null
 
   INSTALL_MODE_PER_ALL_USERS?: null
+  INSTALL_MODE_PER_ALL_USERS_DEFAULT?: null
   INSTALL_MODE_PER_ALL_USERS_REQUIRED?: null
 
   allowToChangeInstallationDirectory?: null
